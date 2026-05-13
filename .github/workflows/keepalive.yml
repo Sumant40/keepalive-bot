@@ -1,0 +1,30 @@
+name: Keep Sites Alive
+
+on:
+  schedule:
+    # Runs every 20 minutes — adjust as needed
+    - cron: "*/20 * * * *"
+  workflow_dispatch:   # allows manual trigger from GitHub UI
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install playwright
+
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium --with-deps
+
+      - name: Run keep-alive script
+        run: python keepalive_cloud.py

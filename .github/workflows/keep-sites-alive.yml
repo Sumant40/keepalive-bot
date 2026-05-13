@@ -53,3 +53,5 @@ jobs:
           echo "Check the **Run keep-alive script** step above for the full error log." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Triggered at:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+
+# updated to activate schedule

@@ -12,7 +12,7 @@ SITES = [
         "name": "Portfolio Site",
         "url": "https://sumantj.xyz/",
         "type": "portfolio",
-        "refresh_count": 4,
+        "refresh_count": 8,
     },
     {
         "id": "dashboard",

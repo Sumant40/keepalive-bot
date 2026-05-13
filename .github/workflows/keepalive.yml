@@ -1,30 +1,55 @@
 name: Keep Sites Alive
-
+ 
 on:
   schedule:
-    # Runs every 20 minutes — adjust as needed
     - cron: "*/20 * * * *"
-  workflow_dispatch:   # allows manual trigger from GitHub UI
-
+  workflow_dispatch:
+ 
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    timeout-minutes: 18  # leaves a 2-min buffer before next 20-min trigger
+ 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+ 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+ 
       - name: Install dependencies
         run: pip install playwright
-
+ 
+      # Cache Playwright's Chromium download (~200MB) across runs.
+      # Still runs `playwright install` so missing deps are caught,
+      # but skips the slow download when the cache is warm.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+ 
       - name: Install Playwright browsers
         run: python -m playwright install chromium --with-deps
-
+ 
       - name: Run keep-alive script
+        id: keepalive
         run: python keepalive_cloud.py
+ 
+      # Runs only when the script above fails (exit code 1).
+      # Writes the error summary into the GitHub Actions job summary page
+      # so you can see exactly which sites failed without digging through logs.
+      - name: Report failures
+        if: failure() && steps.keepalive.outcome == 'failure'
+        run: |
+          echo "## ❌ Keep-Alive Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "One or more sites could not be reached after retries." >> $GITHUB_STEP_SUMMARY
+          echo "Check the **Run keep-alive script** step above for the full error log." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered at:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY

@@ -1,9 +1,11 @@
 """
 Keep-alive script for GitHub Actions.
 Visits each site, wakes sleeping Streamlit apps, and refreshes the portfolio site.
+Exits with code 1 if any site fails after retries — the workflow catches this.
 """
 import time
 import sys
+from dataclasses import dataclass, field
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 SITES = [
@@ -35,8 +37,23 @@ WAKE_SELECTORS = [
     "button:has-text('Rerun')",
 ]
 
+MAX_RETRIES = 2
+RETRY_DELAY = 10  # seconds between retries
+
+
+@dataclass
+class SiteResult:
+    name: str
+    url: str
+    success: bool
+    attempts: int
+    error: str = ""
+    detail: str = ""
+
+
 def log(name, msg):
     print(f"[{name}] {msg}", flush=True)
+
 
 def ping_portfolio(page, site):
     name = site["name"]
@@ -47,6 +64,7 @@ def ping_portfolio(page, site):
         time.sleep(2)
         log(name, f"Refresh {i}/{refreshes} done")
     log(name, "Portfolio alive ✓")
+
 
 def ping_streamlit(page, site):
     name = site["name"]
@@ -68,8 +86,81 @@ def ping_streamlit(page, site):
 
     log(name, "App already awake ✓")
 
+
+def visit_site(page, site):
+    """Dispatch to the right handler based on site type."""
+    if site["type"] == "portfolio":
+        ping_portfolio(page, site)
+    elif site["type"] == "streamlit":
+        ping_streamlit(page, site)
+    else:
+        raise ValueError(f"Unknown site type: {site['type']!r}")
+
+
+def visit_with_retries(page, site) -> SiteResult:
+    """Try visiting a site up to MAX_RETRIES+1 times. Returns a SiteResult."""
+    name = site["name"]
+    last_error = ""
+
+    for attempt in range(1, MAX_RETRIES + 2):
+        try:
+            if attempt > 1:
+                log(name, f"Retry {attempt - 1}/{MAX_RETRIES} after {RETRY_DELAY}s ...")
+                time.sleep(RETRY_DELAY)
+
+            visit_site(page, site)
+            return SiteResult(
+                name=name,
+                url=site["url"],
+                success=True,
+                attempts=attempt,
+            )
+
+        except PlaywrightTimeout as e:
+            last_error = f"Timeout: {e}"
+            log(name, f"[attempt {attempt}] Timed out — {e}")
+
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            log(name, f"[attempt {attempt}] Error — {e}")
+
+    return SiteResult(
+        name=name,
+        url=site["url"],
+        success=False,
+        attempts=MAX_RETRIES + 1,
+        error=last_error,
+    )
+
+
+def print_summary(results: list[SiteResult]):
+    """Print a structured summary table that's easy to read in GitHub Actions logs."""
+    print("\n" + "=" * 60, flush=True)
+    print("SUMMARY", flush=True)
+    print("=" * 60, flush=True)
+
+    passed = [r for r in results if r.success]
+    failed = [r for r in results if not r.success]
+
+    for r in passed:
+        attempts_note = f" (attempt {r.attempts})" if r.attempts > 1 else ""
+        print(f"  ✓  {r.name}{attempts_note}", flush=True)
+
+    for r in failed:
+        print(f"  ✗  {r.name}", flush=True)
+        print(f"       URL:    {r.url}", flush=True)
+        print(f"       Error:  {r.error}", flush=True)
+
+    print("=" * 60, flush=True)
+    print(f"  {len(passed)}/{len(results)} sites OK", flush=True)
+    if failed:
+        print(f"  {len(failed)} failed: {', '.join(r.name for r in failed)}", flush=True)
+    print("=" * 60, flush=True)
+
+
 def main():
-    errors = []
+    results: list[SiteResult] = []
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -82,25 +173,18 @@ def main():
         page = context.new_page()
 
         for site in SITES:
-            try:
-                if site["type"] == "portfolio":
-                    ping_portfolio(page, site)
-                elif site["type"] == "streamlit":
-                    ping_streamlit(page, site)
-            except Exception as e:
-                msg = f"ERROR: {e}"
-                log(site["name"], msg)
-                errors.append(msg)
+            result = visit_with_retries(page, site)
+            results.append(result)
 
         browser.close()
 
-    if errors:
-        print("\nSome sites had errors:")
-        for e in errors:
-            print(f"  - {e}")
+    print_summary(results)
+
+    failed = [r for r in results if not r.success]
+    if failed:
+        # Exit 1 so the workflow step fails and you get notified
         sys.exit(1)
-    else:
-        print("\nAll sites pinged successfully ✓")
+
 
 if __name__ == "__main__":
     main()

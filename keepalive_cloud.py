@@ -3,9 +3,9 @@ Keep-alive script for GitHub Actions.
 Visits each site, wakes sleeping Streamlit apps, and refreshes the portfolio site.
 Exits with code 1 if any site fails after retries — the workflow catches this.
 """
-import time
 import sys
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 SITES = [
@@ -26,6 +26,12 @@ SITES = [
         "id": "foodreview",
         "name": "Food Review NLP",
         "url": "https://foodreviewnlp.streamlit.app/",
+        "type": "streamlit",
+    },
+    {
+        "id": "Pharmacovigilance",
+        "name": "Pharmacovigilance App",
+        "url": "https://pharmacovigilance.streamlit.app/",
         "type": "streamlit",
     },
 ]

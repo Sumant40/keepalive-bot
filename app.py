@@ -398,9 +398,15 @@ DASHBOARD_HTML = """
     </div>
   </div>
   <div class="header-right">
-        <button class="refresh-button" id="refresh-button">Refresh now</button>
-        <div class="pulse-dot"></div>
-        <span id="next-refresh">Refreshing display in 10s…</span>
+    <button class="refresh-button" id="refresh-button">Refresh now</button>
+    <div class="pulse-dot"></div>
+    <span id="next-refresh">Refreshing display in 10s…</span>
+  </div>
+</header>
+
+<main>
+  <section class="cards" id="cards-container" aria-label="Site status cards"></section>
+
   <div class="log-section">
     <h2>📋 Activity Log</h2>
     <div class="log-box" id="log-box"></div>
@@ -533,7 +539,7 @@ def api_healthz():
     return jsonify({"status": "ok", "message": "KeepAlive service is running."}), 200
 
 
-@app.before_first_request
+@app.before_request
 def ensure_worker_running():
     start_keepalive_worker()
 

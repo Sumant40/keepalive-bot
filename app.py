@@ -30,6 +30,13 @@ SITES = [
         "type": "streamlit",
         "interval_seconds": 300,
     },
+    {
+        "id": "Pharmacovigilance",
+        "name": "Pharmacovigilance App",
+        "url": "https://pharmacovigilance.streamlit.app/",
+        "type": "streamlit",
+        "interval_seconds": 300,
+    },
 ]
 
 # ─── State ────────────────────────────────────────────────────────────────────
@@ -48,6 +55,8 @@ site_status = {
 }
 
 logs = []   # rolling list of log entries (max 200)
+worker_thread = None
+worker_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("keepalive")
@@ -187,6 +196,53 @@ def worker():
             time.sleep(10)  # check schedule every 10 s
 
 
+def visit_site(page, site):
+    if site["type"] == "portfolio":
+        ping_portfolio(page, site)
+    elif site["type"] == "streamlit":
+        ping_streamlit(page, site)
+    else:
+        raise ValueError(f"Unknown site type: {site['type']!r}")
+
+
+def start_keepalive_worker():
+    global worker_thread
+    with worker_lock:
+        if worker_thread is None or not worker_thread.is_alive():
+            worker_thread = threading.Thread(target=worker, daemon=True)
+            worker_thread.start()
+            log.info("Keep-alive worker started.")
+    return worker_thread
+
+
+def refresh_all_sites():
+    def refresh_loop():
+        log.info("Manual refresh started.")
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    )
+                )
+                page = context.new_page()
+                for site in SITES:
+                    try:
+                        visit_site(page, site)
+                    except Exception as e:
+                        add_log(site["id"], f"Manual refresh error: {e}", "error")
+                browser.close()
+        except Exception as e:
+            log.error(f"Manual refresh failed: {e}")
+        finally:
+            log.info("Manual refresh finished.")
+
+    threading.Thread(target=refresh_loop, daemon=True).start()
+
+
 # ─── Flask dashboard ──────────────────────────────────────────────────────────
 
 app = Flask(__name__)
@@ -311,6 +367,18 @@ DASHBOARD_HTML = """
     .log-info    .log-msg { color: var(--text); }
     .log-warning .log-msg { color: var(--yellow); }
     .log-error   .log-msg { color: var(--red); }
+    .refresh-button {
+      border: 1px solid rgba(255,255,255,.12);
+      background: transparent;
+      color: var(--text);
+      padding: 10px 16px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: .85rem;
+      transition: background .2s, transform .2s;
+    }
+    .refresh-button:hover { background: rgba(255,255,255,.05); transform: translateY(-1px); }
+    .refresh-button:disabled { opacity: .45; cursor: not-allowed; }
 
     /* ── Footer ── */
     footer { text-align: center; padding: 24px; color: var(--muted); font-size: .78rem; border-top: 1px solid var(--border); margin-top: 40px; }
@@ -330,16 +398,9 @@ DASHBOARD_HTML = """
     </div>
   </div>
   <div class="header-right">
-    <div class="pulse-dot"></div>
-    <span id="next-refresh">Refreshing in 10s…</span>
-  </div>
-</header>
-
-<main>
-  <div class="cards" id="cards-container">
-    <!-- injected by JS -->
-  </div>
-
+        <button class="refresh-button" id="refresh-button">Refresh now</button>
+        <div class="pulse-dot"></div>
+        <span id="next-refresh">Refreshing display in 10s…</span>
   <div class="log-section">
     <h2>📋 Activity Log</h2>
     <div class="log-box" id="log-box"></div>
@@ -351,7 +412,7 @@ DASHBOARD_HTML = """
 <script>
 const STATUS_ICON = { alive:'✅', sleeping:'😴', waking:'⚡', error:'❌', pending:'⏳' };
 const BADGE_CLASS = { alive:'badge-alive', sleeping:'badge-sleeping', waking:'badge-waking', error:'badge-error', pending:'badge-pending' };
-const SITE_ICONS  = { portfolio:'🌐', dashboard:'📊', foodreview:'🍔' };
+const SITE_ICONS  = { portfolio:'🌐', dashboard:'📊', foodreview:'🍔', Pharmacovigilance:'💊' };
 
 let countdown = 10;
 
@@ -410,13 +471,35 @@ async function refresh() {
   } catch(e) { console.error(e); }
 }
 
+async function requestRefresh() {
+  const button = document.getElementById('refresh-button');
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = 'Refreshing…';
+
+  try {
+    const res = await fetch('/api/refresh', { method: 'POST' });
+    if (!res.ok) throw new Error('Refresh request failed');
+  } catch (err) {
+    console.error(err);
+    alert('Unable to start manual refresh. Check the logs.');
+  } finally {
+    setTimeout(() => {
+      button.disabled = false;
+      button.textContent = original;
+    }, 5000);
+  }
+}
+
+document.getElementById('refresh-button').addEventListener('click', requestRefresh);
+
 function tick() {
   countdown--;
   if (countdown <= 0) {
     countdown = 10;
     refresh();
   }
-  document.getElementById('next-refresh').textContent = `Refreshing in ${countdown}s…`;
+  document.getElementById('next-refresh').textContent = `Refreshing display in ${countdown}s…`;
 }
 
 refresh();
@@ -439,10 +522,25 @@ def api_logs():
     return jsonify(logs)
 
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+@app.route("/api/refresh", methods=["POST"])
+def api_refresh():
+    refresh_all_sites()
+    return jsonify({"status": "started", "message": "Manual refresh started."}), 202
+
+
+@app.route("/healthz")
+def api_healthz():
+    return jsonify({"status": "ok", "message": "KeepAlive service is running."}), 200
+
+
+@app.before_first_request
+def ensure_worker_running():
+    start_keepalive_worker()
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
+    start_keepalive_worker()
     log.info("Dashboard → http://localhost:5000")
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

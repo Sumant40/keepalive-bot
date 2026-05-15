@@ -79,7 +79,15 @@ def ping_streamlit(page, site):
                 log(name, "App sleeping — clicking wake button ...")
                 btn.click()
                 time.sleep(6)
-                log(name, "App woken ✓")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=20_000)
+                except PlaywrightTimeout:
+                    pass
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=30_000)
+                except PlaywrightTimeout:
+                    pass
+                log(name, "App woken and refreshed ✓")
                 return
         except PlaywrightTimeout:
             pass
